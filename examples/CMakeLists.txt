@@ -66,3 +66,21 @@ target_link_libraries(echo_server GameNetworkingSockets::GameNetworkingSockets)
 if(COMMAND add_sanitizers)
 	add_sanitizers(echo_server)
 endif()
+
+#
+# Really simple echo client
+#
+
+add_executable(
+	echo_client
+	echo_client.cpp)
+
+if(COMMAND set_target_common_gns_properties)
+	set_target_common_gns_properties( echo_client )
+endif()
+
+target_link_libraries(echo_client GameNetworkingSockets::GameNetworkingSockets)
+
+if(COMMAND add_sanitizers)
+	add_sanitizers(echo_client)
+endif()

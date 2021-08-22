@@ -171,6 +171,20 @@ void LocalUserInput_Init()
 	} );
 }
 
+void LocalUserInput_Kill()
+{
+// Does not work.  We won't clean up, we'll just nuke the process.
+//	g_bQuit = true;
+//	_close( fileno( stdin ) );
+//
+//	if ( s_pThreadUserInput )
+//	{
+//		s_pThreadUserInput->join();
+//		delete s_pThreadUserInput;
+//		s_pThreadUserInput = nullptr;
+//	}
+}
+
 // You really gotta wonder what kind of pedantic garbage was
 // going through the minds of people who designed std::string
 // that they decided not to include trim.
@@ -208,160 +222,73 @@ bool LocalUserInput_GetNext( std::string &result )
 	return got_input;
 }
 
+
 /////////////////////////////////////////////////////////////////////////////
 //
-// ChatServer
+// ChatClient
 //
 /////////////////////////////////////////////////////////////////////////////
 
-class ChatServer
+class ChatClient
 {
 public:
-	void Run( uint16 nPort )
+	void Run( const SteamNetworkingIPAddr &serverAddr )
 	{
 		// Select instance to use.  For now we'll always use the default.
-		// But we could use SteamGameServerNetworkingSockets() on Steam.
 		m_pInterface = SteamNetworkingSockets();
 
-		// Start listening
-		SteamNetworkingIPAddr serverLocalAddr;
-		serverLocalAddr.Clear();
-		serverLocalAddr.m_port = nPort;
+		// Start connecting
+		char szAddr[ SteamNetworkingIPAddr::k_cchMaxString ];
+		serverAddr.ToString( szAddr, sizeof(szAddr), true );
+		Printf( "Connecting to chat server at %s", szAddr );
 		SteamNetworkingConfigValue_t opt;
 		opt.SetPtr( k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)SteamNetConnectionStatusChangedCallback );
-		m_hListenSock = m_pInterface->CreateListenSocketIP( serverLocalAddr, 1, &opt );
-		if ( m_hListenSock == k_HSteamListenSocket_Invalid )
-			FatalError( "Failed to listen on port %d", nPort );
-		m_hPollGroup = m_pInterface->CreatePollGroup();
-		if ( m_hPollGroup == k_HSteamNetPollGroup_Invalid )
-			FatalError( "Failed to listen on port %d", nPort );
-		Printf( "Server listening on port %d\n", nPort );
+		m_hConnection = m_pInterface->ConnectByIPAddress( serverAddr, 1, &opt );
+		if ( m_hConnection == k_HSteamNetConnection_Invalid )
+			FatalError( "Failed to create connection" );
 
 		while ( !g_bQuit )
 		{
 			PollIncomingMessages();
 			PollConnectionStateChanges();
-			PollLocalUserInput();
+			SendEcho();
 			std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
 		}
-
-		// Close all the connections
-		Printf( "Closing connections...\n" );
-		for ( auto it: m_mapClients )
-		{
-			// Send them one more goodbye message.  Note that we also have the
-			// connection close reason as a place to send final data.  However,
-			// that's usually best left for more diagnostic/debug text not actual
-			// protocol strings.
-			SendStringToClient( it.first, "Server is shutting down.  Goodbye." );
-
-			// Close the connection.  We use "linger mode" to ask SteamNetworkingSockets
-			// to flush this out and close gracefully.
-			m_pInterface->CloseConnection( it.first, 0, "Server Shutdown", true );
-		}
-		m_mapClients.clear();
-
-		m_pInterface->CloseListenSocket( m_hListenSock );
-		m_hListenSock = k_HSteamListenSocket_Invalid;
-
-		m_pInterface->DestroyPollGroup( m_hPollGroup );
-		m_hPollGroup = k_HSteamNetPollGroup_Invalid;
 	}
 private:
 
-	HSteamListenSocket m_hListenSock;
-	HSteamNetPollGroup m_hPollGroup;
+	HSteamNetConnection m_hConnection;
 	ISteamNetworkingSockets *m_pInterface;
-
-	struct Client_t
-	{
-		std::string m_sNick;
-	};
-
-	std::map< HSteamNetConnection, Client_t > m_mapClients;
-
-	void SendStringToClient( HSteamNetConnection conn, const char *str )
-	{
-		m_pInterface->SendMessageToConnection( conn, str, (uint32)strlen(str), k_nSteamNetworkingSend_Reliable, nullptr );
-	}
-
-	void SendStringToAllClients( const char *str, HSteamNetConnection except = k_HSteamNetConnection_Invalid )
-	{
-		for ( auto &c: m_mapClients )
-		{
-			if ( c.first != except )
-				SendStringToClient( c.first, str );
-		}
-	}
 
 	void PollIncomingMessages()
 	{
-		char temp[ 1024 ];
-
 		while ( !g_bQuit )
 		{
 			ISteamNetworkingMessage *pIncomingMsg = nullptr;
-			int numMsgs = m_pInterface->ReceiveMessagesOnPollGroup( m_hPollGroup, &pIncomingMsg, 1 );
+			int numMsgs = m_pInterface->ReceiveMessagesOnConnection( m_hConnection, &pIncomingMsg, 1 );
 			if ( numMsgs == 0 )
 				break;
 			if ( numMsgs < 0 )
 				FatalError( "Error checking for messages" );
-			assert( numMsgs == 1 && pIncomingMsg );
-			auto itClient = m_mapClients.find( pIncomingMsg->m_conn );
-			assert( itClient != m_mapClients.end() );
 
-			// '\0'-terminate it to make it easier to parse
-			std::string sCmd;
-			sCmd.assign( (const char *)pIncomingMsg->m_pData, pIncomingMsg->m_cbSize );
-			const char *cmd = sCmd.c_str();
+			// Just echo anything we get from the server
+			fwrite( pIncomingMsg->m_pData, 1, pIncomingMsg->m_cbSize, stdout );
+			fputc( '\n', stdout );
 
 			// We don't need this anymore.
 			pIncomingMsg->Release();
-
-			// Check for known commands.  None of this example code is secure or robust.
-			// Don't write a real server like this, please.
-
-			if ( strncmp( cmd, "echo", 4 ) == 0 )
-			{
-				Printf( "Got echo from %s\n", itClient->second.m_sNick.c_str());
-				// Respond to client
-				sprintf( temp, "echo answer");
-				SendStringToClient( itClient->first, temp );
-				continue;
-			}
 		}
 	}
 
-	void PollLocalUserInput()
+	void SendEcho()
 	{
-		std::string cmd;
-		while ( !g_bQuit && LocalUserInput_GetNext( cmd ))
-		{
-			if ( strcmp( cmd.c_str(), "/quit" ) == 0 )
-			{
-				g_bQuit = true;
-				Printf( "Shutting down server" );
-				break;
-			}
-
-			// That's the only command we support
-			Printf( "The server only knows one command: '/quit'" );
-		}
-	}
-
-	void SetClientNick( HSteamNetConnection hConn, const char *nick )
-	{
-
-		// Remember their nick
-		m_mapClients[hConn].m_sNick = nick;
-
-		// Set the connection name, too, which is useful for debugging
-		m_pInterface->SetConnectionName( hConn, nick );
+		std::string cmd("echo");
+		m_pInterface->SendMessageToConnection( m_hConnection, cmd.c_str(), (uint32)cmd.length(), k_nSteamNetworkingSend_Reliable, nullptr );
 	}
 
 	void OnSteamNetConnectionStatusChanged( SteamNetConnectionStatusChangedCallback_t *pInfo )
 	{
-		char temp[1024];
+		assert( pInfo->m_hConn == m_hConnection || m_hConnection == k_HSteamNetConnection_Invalid );
 
 		// What's the state of the connection?
 		switch ( pInfo->m_info.m_eState )
@@ -373,50 +300,23 @@ private:
 			case k_ESteamNetworkingConnectionState_ClosedByPeer:
 			case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
 			{
-				// Ignore if they were not previously connected.  (If they disconnected
-				// before we accepted the connection.)
-				if ( pInfo->m_eOldState == k_ESteamNetworkingConnectionState_Connected )
+				g_bQuit = true;
+
+				// Print an appropriate message
+				if ( pInfo->m_eOldState == k_ESteamNetworkingConnectionState_Connecting )
 				{
-
-					// Locate the client.  Note that it should have been found, because this
-					// is the only codepath where we remove clients (except on shutdown),
-					// and connection change callbacks are dispatched in queue order.
-					auto itClient = m_mapClients.find( pInfo->m_hConn );
-					assert( itClient != m_mapClients.end() );
-
-					// Select appropriate log messages
-					const char *pszDebugLogAction;
-					if ( pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally )
-					{
-						pszDebugLogAction = "problem detected locally";
-						sprintf( temp, "Alas, %s hath fallen into shadow.  (%s)", itClient->second.m_sNick.c_str(), pInfo->m_info.m_szEndDebug );
-					}
-					else
-					{
-						// Note that here we could check the reason code to see if
-						// it was a "usual" connection or an "unusual" one.
-						pszDebugLogAction = "closed by peer";
-						sprintf( temp, "%s hath departed", itClient->second.m_sNick.c_str() );
-					}
-
-					// Spew something to our own log.  Note that because we put their nick
-					// as the connection description, it will show up, along with their
-					// transport-specific data (e.g. their IP address)
-					Printf( "Connection %s %s, reason %d: %s\n",
-						pInfo->m_info.m_szConnectionDescription,
-						pszDebugLogAction,
-						pInfo->m_info.m_eEndReason,
-						pInfo->m_info.m_szEndDebug
-					);
-
-					m_mapClients.erase( itClient );
-
-					// Send a message so everybody else knows what happened
-					SendStringToAllClients( temp );
+					// Note: we could distinguish between a timeout, a rejected connection,
+					// or some other transport problem.
+					Printf( "We sought the remote host, yet our efforts were met with defeat.  (%s)", pInfo->m_info.m_szEndDebug );
+				}
+				else if ( pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally )
+				{
+					Printf( "Alas, troubles beset us; we have lost contact with the host.  (%s)", pInfo->m_info.m_szEndDebug );
 				}
 				else
 				{
-					assert( pInfo->m_eOldState == k_ESteamNetworkingConnectionState_Connecting );
+					// NOTE: We could check the reason code for a normal disconnection
+					Printf( "The host hath bidden us farewell.  (%s)", pInfo->m_info.m_szEndDebug );
 				}
 
 				// Clean up the connection.  This is important!
@@ -426,58 +326,17 @@ private:
 				// and we cannot linger because it's already closed on the other end,
 				// so we just pass 0's.
 				m_pInterface->CloseConnection( pInfo->m_hConn, 0, nullptr, false );
+				m_hConnection = k_HSteamNetConnection_Invalid;
 				break;
 			}
 
 			case k_ESteamNetworkingConnectionState_Connecting:
-			{
-				// This must be a new connection
-				assert( m_mapClients.find( pInfo->m_hConn ) == m_mapClients.end() );
-
-				Printf( "Connection request from %s", pInfo->m_info.m_szConnectionDescription );
-
-				// A client is attempting to connect
-				// Try to accept the connection.
-				if ( m_pInterface->AcceptConnection( pInfo->m_hConn ) != k_EResultOK )
-				{
-					// This could fail.  If the remote host tried to connect, but then
-					// disconnected, the connection may already be half closed.  Just
-					// destroy whatever we have on our side.
-					m_pInterface->CloseConnection( pInfo->m_hConn, 0, nullptr, false );
-					Printf( "Can't accept connection.  (It was already closed?)" );
-					break;
-				}
-
-				// Assign the poll group
-				if ( !m_pInterface->SetConnectionPollGroup( pInfo->m_hConn, m_hPollGroup ) )
-				{
-					m_pInterface->CloseConnection( pInfo->m_hConn, 0, nullptr, false );
-					Printf( "Failed to set poll group?" );
-					break;
-				}
-
-				// Generate a random nick.  A random temporary nick
-				// is really dumb and not how you would write a real chat server.
-				// You would want them to have some sort of signon message,
-				// and you would keep their client in a state of limbo (connected,
-				// but not logged on) until them.  I'm trying to keep this example
-				// code really simple.
-				char nick[ 64 ];
-				sprintf( nick, "youkai-%d", 10000 + ( rand() % 100000 ) );
-
-				// Send them a welcome message
-				sprintf( temp, "Welcome, stranger.  Thou art known to us for now as '%s'; upon thine command '/nick' we shall know thee otherwise.", nick ); 
-				SendStringToClient( pInfo->m_hConn, temp ); 
-
-				// Add them to the client list, using std::map wacky syntax
-				m_mapClients[ pInfo->m_hConn ];
-				SetClientNick( pInfo->m_hConn, nick );
+				// We will get this callback when we start connecting.
+				// We can ignore this.
 				break;
-			}
 
 			case k_ESteamNetworkingConnectionState_Connected:
-				// We will get a callback immediately after accepting the connection.
-				// Since we are the server, we can ignore this, it's not news to us.
+				Printf( "Connected to server OK" );
 				break;
 
 			default:
@@ -486,7 +345,7 @@ private:
 		}
 	}
 
-	static ChatServer *s_pCallbackInstance;
+	static ChatClient *s_pCallbackInstance;
 	static void SteamNetConnectionStatusChangedCallback( SteamNetConnectionStatusChangedCallback_t *pInfo )
 	{
 		s_pCallbackInstance->OnSteamNetConnectionStatusChanged( pInfo );
@@ -499,8 +358,7 @@ private:
 	}
 };
 
-ChatServer *ChatServer::s_pCallbackInstance = nullptr;
-
+ChatClient *ChatClient::s_pCallbackInstance = nullptr;
 
 const uint16 DEFAULT_SERVER_PORT = 27020;
 
@@ -509,7 +367,7 @@ void PrintUsageAndExit( int rc = 1 )
 	fflush(stderr);
 	printf(
 R"usage(Usage:
-    example_chat server [--port PORT]
+    example_chat client SERVER_ADDR [--port PORT]
 )usage"
 	);
 	fflush(stdout);
@@ -535,17 +393,25 @@ int ParsePort(int argc, const char *argv[], int i)
 
 int main( int argc, const char *argv[] )
 {
-	bool bServer = false;
+	bool bClient = false;
 	int nPort = DEFAULT_SERVER_PORT;
 	SteamNetworkingIPAddr addrServer; addrServer.Clear();
 
 	for ( int i = 1 ; i < argc ; ++i )
 	{
-		if ( !bServer )
+		if ( !bClient )
 		{
-			if ( !strcmp( argv[i], "server" ) )
+			if ( !strcmp( argv[i], "client" ) )
 			{
-				bServer = true;
+				bClient = true;
+
+				++i;
+				if ( i >= argc )
+					PrintUsageAndExit();
+
+				if ( addrServer.IsIPv6AllZeros() )
+					if ( !addrServer.ParseString( argv[i] ) )
+						FatalError( "Invalid server address '%s'", argv[i] );
 
 				++i;
 				if ( i >= argc )
@@ -559,21 +425,23 @@ int main( int argc, const char *argv[] )
 		PrintUsageAndExit();
 	}
 
-	if ( !bServer )
+	if ( !bClient || ( bClient && addrServer.IsIPv6AllZeros() ) )
 		PrintUsageAndExit();
 
+	if ( bClient && addrServer.m_port == 0 )
+		addrServer.m_port = nPort;
 
-	// Create server sockets
+	// Create client and server sockets
 	InitSteamDatagramConnectionSockets();
 	LocalUserInput_Init();
 
-	ChatServer server;
-	server.Run( (uint16)nPort );
-
+	ChatClient client;
+	client.Run( addrServer );
 
 	ShutdownSteamDatagramConnectionSockets();
 
 	// Ug, why is there no simple solution for portable, non-blocking console user input?
 	// Just nuke the process
+	//LocalUserInput_Kill();
 	NukeProcess(0);
 }
