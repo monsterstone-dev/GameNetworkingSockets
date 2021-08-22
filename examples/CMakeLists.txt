@@ -48,3 +48,21 @@ target_link_libraries(example_chat GameNetworkingSockets::GameNetworkingSockets)
 if(COMMAND add_sanitizers)
 	add_sanitizers(example_chat)
 endif()
+
+#
+# Really simple echo server
+#
+
+add_executable(
+	echo_server
+	echo_server.cpp)
+
+if(COMMAND set_target_common_gns_properties)
+	set_target_common_gns_properties( echo_server )
+endif()
+
+target_link_libraries(echo_server GameNetworkingSockets::GameNetworkingSockets)
+
+if(COMMAND add_sanitizers)
+	add_sanitizers(echo_server)
+endif()
