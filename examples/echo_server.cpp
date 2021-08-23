@@ -272,6 +272,7 @@ private:
 	HSteamListenSocket m_hListenSock;
 	HSteamNetPollGroup m_hPollGroup;
 	ISteamNetworkingSockets *m_pInterface;
+	int curCliIdx = 0;
 
 	struct Client_t
 	{
@@ -323,7 +324,7 @@ private:
 
 			if ( strncmp( cmd, "echo", 4 ) == 0 )
 			{
-				Printf( "Got echo from %s\n", itClient->second.m_sNick.c_str());
+				// Printf( "Got echo from %s\n", itClient->second.m_sNick.c_str());
 				// Respond to client
 				sprintf( temp, "echo answer");
 				SendStringToClient( itClient->first, temp );
@@ -463,10 +464,10 @@ private:
 				// but not logged on) until them.  I'm trying to keep this example
 				// code really simple.
 				char nick[ 64 ];
-				sprintf( nick, "youkai-%d", 10000 + ( rand() % 100000 ) );
-
+				sprintf( nick, "youkai-%d", curCliIdx++ );
+				Printf("%s connected\n", nick);
 				// Send them a welcome message
-				sprintf( temp, "Welcome, stranger.  Thou art known to us for now as '%s'; upon thine command '/nick' we shall know thee otherwise.", nick ); 
+				sprintf( temp, "Welcome, stranger.  Thou art known to us for now as '%s';", nick ); 
 				SendStringToClient( pInfo->m_hConn, temp ); 
 
 				// Add them to the client list, using std::map wacky syntax
