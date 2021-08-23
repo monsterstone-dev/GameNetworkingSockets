@@ -1,13 +1,10 @@
 #!/bin/bash
-#for i in {1..10} 
-#do
-#    echo "Welcome $i times"
-    ./build/bin/echo_client client 127.0.0.1
-#    usleep 150000
-#done 
-    ./build/bin/echo_client client 127.0.0.1
-    ./build/bin/echo_client client 127.0.0.1
-    ./build/bin/echo_client client 127.0.0.1
+for i in {1..10} 
+do
+    echo "Welcome $i times"
+    ./build/bin/echo_client client 127.0.0.1 &
+    usleep 150000
+done 
 
 # Default 
 #

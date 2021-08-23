@@ -272,8 +272,8 @@ private:
 				FatalError( "Error checking for messages" );
 
 			// Just echo anything we get from the server
-			fwrite( pIncomingMsg->m_pData, 1, pIncomingMsg->m_cbSize, stdout );
-			fputc( '\n', stdout );
+			// fwrite( pIncomingMsg->m_pData, 1, pIncomingMsg->m_cbSize, stdout );
+			// fputc( '\n', stdout );
 
 			// We don't need this anymore.
 			pIncomingMsg->Release();
@@ -433,7 +433,7 @@ int main( int argc, const char *argv[] )
 
 	// Create client and server sockets
 	InitSteamDatagramConnectionSockets();
-	LocalUserInput_Init();
+	// LocalUserInput_Init();
 
 	ChatClient client;
 	client.Run( addrServer );
